@@ -148,9 +148,6 @@ type server struct {
 	pingInterval time.Duration
 	maxMemory    int64
 	used         atomic.Int64
-	// realIPHeader names a header set by a trusted proxy, such as
-	// CF-Connecting-IP. Empty means the peer address is used.
-	realIPHeader string
 	limiter      ipLimiter
 }
 
@@ -181,11 +178,15 @@ func (s *server) release(n int64) {
 	s.used.Add(-n)
 }
 
-func (s *server) clientIP(r *http.Request) string {
-	if s.realIPHeader != "" {
-		if v := r.Header.Get(s.realIPHeader); v != "" {
-			return strings.TrimSpace(strings.Split(v, ",")[0])
-		}
+// clientIP trusts the headers of the proxy in front, as connections arrive
+// through Cloudflare. Exposed directly, a client could forge them to dodge
+// the per-IP limits, but the memory budget and maxConns still hold.
+func clientIP(r *http.Request) string {
+	if v := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]); v != "" {
+		return v
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -549,7 +550,7 @@ func (ss *session) setRole(from *client, id int, role string) error {
 }
 
 func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
-	ip := s.clientIP(r)
+	ip := clientIP(r)
 	if !s.limiter.acquire(ip) {
 		log.Printf("%s: too many connections", ip)
 		http.Error(w, "too many connections", http.StatusTooManyRequests)
@@ -709,9 +710,8 @@ func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(list)
 }
 
-func serve(addr, realIPHeader string, maxMemory int64) error {
+func serve(addr string, maxMemory int64) error {
 	s := newServer()
-	s.realIPHeader = realIPHeader
 	s.maxMemory = maxMemory
 	log.Printf("listening on %s", addr)
 	return http.ListenAndServe(addr, httpHandler(s))

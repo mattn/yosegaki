@@ -181,12 +181,11 @@ func TestHistoryIsTrimmed(t *testing.T) {
 
 func TestConnectionsPerIP(t *testing.T) {
 	s := newServer()
-	s.realIPHeader = "X-Real-IP"
 	ts := httptest.NewServer(httpHandler(s))
 	t.Cleanup(ts.Close)
 	url := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws"
 	opts := func(ip string) *websocket.DialOptions {
-		return &websocket.DialOptions{HTTPHeader: map[string][]string{"X-Real-IP": {ip}}}
+		return &websocket.DialOptions{HTTPHeader: map[string][]string{"CF-Connecting-IP": {ip}}}
 	}
 	ctx := context.Background()
 	for i := range maxConnsPerIP {
@@ -230,5 +229,26 @@ func TestSanitize(t *testing.T) {
 	got := sanitize(" a\x1b[31mb\u009bc‮d⁦e ", 32)
 	if got != "a[31mbcde" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestClientIP(t *testing.T) {
+	for _, tt := range []struct {
+		header map[string]string
+		want   string
+	}{
+		{map[string]string{"CF-Connecting-IP": "203.0.113.1", "X-Forwarded-For": "198.51.100.1"}, "203.0.113.1"},
+		{map[string]string{"X-Forwarded-For": "198.51.100.1, 10.0.0.1"}, "198.51.100.1"},
+		{map[string]string{"X-Forwarded-For": " "}, "192.0.2.9"},
+		{nil, "192.0.2.9"},
+	} {
+		r := httptest.NewRequest("GET", "/ws", nil)
+		r.RemoteAddr = "192.0.2.9:1234"
+		for k, v := range tt.header {
+			r.Header.Set(k, v)
+		}
+		if got := clientIP(r); got != tt.want {
+			t.Errorf("clientIP(%v) = %q, want %q", tt.header, got, tt.want)
+		}
 	}
 }

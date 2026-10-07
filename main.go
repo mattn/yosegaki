@@ -22,7 +22,7 @@ import (
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `usage:
-  yosegaki serve [-addr :8080] [-real-ip-header CF-Connecting-IP] [-max-memory 96]
+  yosegaki serve [-addr :8080] [-max-memory 96]
                                  run the server
   yosegaki connect URL           bridge stdin/stdout to the server (used by vim-yosegaki)
   yosegaki list URL              print public sessions as JSON
@@ -132,10 +132,9 @@ func main() {
 	case "serve":
 		fs := flag.NewFlagSet("serve", flag.ExitOnError)
 		addr := fs.String("addr", ":8080", "listen address")
-		realIP := fs.String("real-ip-header", "", "trusted header with the client IP, such as CF-Connecting-IP")
 		maxMemory := fs.Int64("max-memory", defaultMaxMemory>>20, "memory for documents, history and queues, in MB")
 		fs.Parse(os.Args[2:])
-		log.Fatal(serve(*addr, *realIP, *maxMemory<<20))
+		log.Fatal(serve(*addr, *maxMemory<<20))
 	case "connect":
 		if len(os.Args) != 3 {
 			usage()
