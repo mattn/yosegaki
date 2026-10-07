@@ -30,6 +30,9 @@ const (
 	sendQueueSize   = 256
 )
 
+// Proxies such as Cloudflare drop WebSockets idle for about 100 seconds.
+const pingInterval = 30 * time.Second
+
 const (
 	roleHost    = "host"
 	roleEditor  = "editor"
@@ -102,12 +105,13 @@ type session struct {
 }
 
 type server struct {
-	mu       sync.Mutex
-	sessions map[string]*session
+	mu           sync.Mutex
+	sessions     map[string]*session
+	pingInterval time.Duration
 }
 
 func newServer() *server {
-	return &server{sessions: map[string]*session{}}
+	return &server{sessions: map[string]*session{}, pingInterval: pingInterval}
 }
 
 func newSessionID() string {
@@ -441,9 +445,37 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		c.Write(ctx, websocket.MessageText, errorMessage(err.Error()))
 		return
 	}
-	defer ss.leave(s, cl)
-
 	go func() {
+		t := time.NewTicker(s.pingInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				pctx, cancel := context.WithTimeout(ctx, writeTimeout)
+				err := c.Ping(pctx)
+				cancel()
+				if err != nil {
+					c.CloseNow()
+					return
+				}
+			}
+		}
+	}()
+
+	written := make(chan struct{})
+	defer func() {
+		ss.leave(s, cl)
+		// Let the writer flush what is queued, such as the reason for
+		// closing, before the connection is torn down.
+		select {
+		case <-written:
+		case <-time.After(writeTimeout):
+		}
+	}()
+	go func() {
+		defer close(written)
 		for b := range cl.send {
 			wctx, cancel := context.WithTimeout(ctx, writeTimeout)
 			err := c.Write(wctx, websocket.MessageText, b)
@@ -508,7 +540,11 @@ func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func serve(addr string) error {
-	s := newServer()
+	log.Printf("listening on %s", addr)
+	return http.ListenAndServe(addr, httpHandler(newServer()))
+}
+
+func httpHandler(s *server) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/sessions", s.handleSessions)
@@ -520,6 +556,5 @@ func serve(addr string) error {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte("yosegaki: collaborative editing server for Vim\nhttps://github.com/mattn/vim-yosegaki\n"))
 	})
-	log.Printf("listening on %s", addr)
-	return http.ListenAndServe(addr, mux)
+	return mux
 }
