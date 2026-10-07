@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>yosegaki: collaborative editing for Vim</title>
+<meta name="description" content="Real-time collaborative editing for Vim. Share a buffer, let others in, and write together.">
+<meta property="og:title" content="yosegaki: collaborative editing for Vim">
+<meta property="og:description" content="Real-time collaborative editing for Vim. Share a buffer, let others in, and write together.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d1117'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' fill='%2398c379' font-family='sans-serif'%3E寄%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="nav">
+  <a class="brand" href="/"><span class="kanji">寄</span> yosegaki</a>
+  <nav>
+    <a href="#how"><span lang="en">How it works</span><span lang="ja">仕組み</span></a>
+    <a href="#install"><span lang="en">Install</span><span lang="ja">導入</span></a>
+    <a href="#usage"><span lang="en">Usage</span><span lang="ja">使い方</span></a>
+    <a href="https://github.com/mattn/vim-yosegaki">GitHub</a>
+    <button id="lang" type="button" aria-label="Switch language">日本語</button>
+  </nav>
+</header>
+
+<main>
+<section class="hero">
+  <div class="hero-text">
+    <p class="eyebrow"><span lang="en">Real-time collaborative editing for Vim</span><span lang="ja">Vim のためのリアルタイム共同編集</span></p>
+    <h1><span class="kanji-big">寄せ書き</span><span class="latin">yosegaki</span></h1>
+    <p class="lead">
+      <span lang="en">Share a buffer. Let people in. Write together, each in your own Vim, with your own config, keys and plugins.</span>
+      <span lang="ja">バッファを共有して、仲間を招き入れて、一緒に書く。それぞれが自分の Vim、自分の設定、自分のキーバインドのままで。</span>
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="#install"><span lang="en">Get started</span><span lang="ja">はじめる</span></a>
+      <a class="btn" href="https://github.com/mattn/yosegaki"><span lang="en">Server source</span><span lang="ja">サーバのソース</span></a>
+    </div>
+    <p class="live" id="live" hidden></p>
+  </div>
+
+  <div class="demo" aria-label="Two Vim instances editing the same buffer">
+    <div class="pane" data-self="mattn">
+      <div class="titlebar"><i></i><i></i><i></i><span>mattn: vim main.go</span></div>
+      <pre class="screen"></pre>
+      <div class="status"><span class="file">main.go</span><span class="role">[yosegaki host 2]</span></div>
+      <div class="mode">-- INSERT --</div>
+    </div>
+    <div class="pane" data-self="alice">
+      <div class="titlebar"><i></i><i></i><i></i><span>alice: vim</span></div>
+      <pre class="screen"></pre>
+      <div class="status"><span class="file">yosegaki://4ohcv6olt6lol6fs</span><span class="role">[yosegaki editor 2]</span></div>
+      <div class="mode">-- INSERT --</div>
+    </div>
+  </div>
+</section>
+
+<section class="features">
+  <article>
+    <h3><span lang="en">Merged, not locked</span><span lang="ja">ロックせずにマージ</span></h3>
+    <p><span lang="en">Everyone types at once. Edits are merged with operational transformation, so all buffers end up with the same text, even when two people type on the same line.</span><span lang="ja">全員が同時に打てます。編集は Operational Transformation でマージされるので、同じ行を同時に触っても、最後は全員のバッファが同じ内容になります。</span></p>
+  </article>
+  <article>
+    <h3><span lang="en">The host decides</span><span lang="ja">決めるのはホスト</span></h3>
+    <p><span lang="en">Public sessions can be watched by anyone with the link. Private ones wait at the door. Nobody edits until the host says yes, and the server enforces it.</span><span lang="ja">public ならリンクを知っている人は誰でも閲覧でき、private なら入室にも承認が必要です。ホストが許可するまで誰も編集できず、それはサーバ側で強制されます。</span></p>
+  </article>
+  <article>
+    <h3><span lang="en">See each other</span><span lang="ja">お互いが見える</span></h3>
+    <p><span lang="en">Other people's cursors show up in their own colors with their names, so you always know who is where.</span><span lang="ja">他の人のカーソルが、色と名前付きで表示されます。誰がどこを触っているかが一目でわかります。</span></p>
+  </article>
+  <article>
+    <h3><span lang="en">Plain Vim script</span><span lang="ja">素の Vim script</span></h3>
+    <p><span lang="en">The plugin is legacy Vim script built on channels, text properties and popups. No Python, no Lua, no patches to Vim.</span><span lang="ja">プラグインは channel、text property、popup を使った legacy Vim script だけで書かれています。Python も Lua も、Vim へのパッチも不要です。</span></p>
+  </article>
+</section>
+
+<section id="how">
+  <h2><span lang="en">How it works</span><span lang="ja">仕組み</span></h2>
+  <div class="flow" role="img" aria-label="Vim talks to yosegaki connect over stdio, which talks to the yosegaki server over WebSocket">
+    <div class="node vim">
+      <b>Vim</b>
+      <small>vim-yosegaki</small>
+    </div>
+    <div class="edge"><span>job stdio<br>JSON lines</span></div>
+    <div class="node bridge">
+      <b>yosegaki connect</b>
+      <small><span lang="en">on every machine</span><span lang="ja">各自のマシンで動く</span></small>
+    </div>
+    <div class="edge"><span>WebSocket<br>wss://</span></div>
+    <div class="node server">
+      <b>yosegaki serve</b>
+      <small><span lang="en">many sessions, one server</span><span lang="ja">1つのサーバで複数セッション</span></small>
+    </div>
+  </div>
+  <div class="cols">
+    <div>
+      <h3><span lang="en">Why a bridge?</span><span lang="ja">なぜ中継役が要るのか</span></h3>
+      <p><span lang="en">Vim channels speak raw TCP, not TLS or WebSocket. So the plugin starts <code>yosegaki connect</code> as a job and talks JSON to it over stdin and stdout. The bridge does the TLS and WebSocket part, using the certificate store of your OS. It is the same binary as the server, so everyone just installs <code>yosegaki</code>.</span><span lang="ja">Vim の channel は生の TCP しか話せず、TLS も WebSocket も扱えません。そこでプラグインは <code>yosegaki connect</code> を job として起動し、標準入出力で JSON をやり取りします。TLS と WebSocket は中継役が担当し、証明書の検証には OS の証明書ストアを使います。サーバと同じバイナリなので、全員が <code>yosegaki</code> を1つ入れるだけです。</span></p>
+    </div>
+    <div>
+      <h3><span lang="en">Why it converges</span><span lang="ja">なぜ食い違わないのか</span></h3>
+      <p><span lang="en">Each edit is sent as an operation (retain, insert, delete) against a known revision. The server puts operations in order and transforms late ones against what happened in between. Clients transform incoming edits against their own unconfirmed ones. Every buffer ends up with the same text.</span><span lang="ja">編集は「どのリビジョンに対する、保持・挿入・削除か」という操作として送られます。サーバは操作に順番を付け、遅れて届いた操作を、その間に起きた操作に合わせて変換します。クライアントも、届いた操作を自分の未確認の編集に合わせて変換します。こうして全員のバッファが同じ内容に収束します。</span></p>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <h2><span lang="en">Install</span><span lang="ja">導入</span></h2>
+  <ol class="steps">
+    <li>
+      <h3><span lang="en">The yosegaki command</span><span lang="ja">yosegaki コマンド</span></h3>
+      <p><span lang="en">Everyone needs it, hosts and guests alike. Grab a binary from</span><span lang="ja">ホストもゲストも全員に必要です。バイナリは</span> <a href="https://github.com/mattn/yosegaki/releases">Releases</a> <span lang="en">or build it:</span><span lang="ja">から入手するか、ビルドします。</span></p>
+      <div class="code"><pre>go install github.com/mattn/yosegaki@latest</pre></div>
+    </li>
+    <li>
+      <h3><span lang="en">The plugin</span><span lang="ja">プラグイン</span></h3>
+      <p><span lang="en">With vim-plug:</span><span lang="ja">vim-plug なら:</span></p>
+      <div class="code"><pre>Plug 'mattn/vim-yosegaki'</pre></div>
+      <p><span lang="en">Or as a Vim package:</span><span lang="ja">Vim のパッケージとして入れる場合:</span></p>
+      <div class="code"><pre>git clone https://github.com/mattn/vim-yosegaki ~/.vim/pack/plugins/start/vim-yosegaki</pre></div>
+    </li>
+    <li>
+      <h3><span lang="en">Check your Vim</span><span lang="ja">Vim の確認</span></h3>
+      <p><span lang="en">You need</span><span lang="ja">必要な機能は</span> <code>+channel</code> <code>+textprop</code> <code>+popupwin</code><span lang="en">, which any recent Vim 9 has.</span><span lang="ja">です。最近の Vim 9 ならすべて入っています。</span></p>
+    </li>
+  </ol>
+</section>
+
+<section id="usage">
+  <h2><span lang="en">Usage</span><span lang="ja">使い方</span></h2>
+  <div class="cols">
+    <div>
+      <h3><span lang="en">Host</span><span lang="ja">ホスト</span></h3>
+      <div class="code"><pre><span class="c">" share the current buffer on this server</span>
+:YosegakiShare private <span class="host-name">yosegaki.compile-error.net</span>
+<span class="c">" a join link is shown; send it to your guests</span>
+
+<span class="c">" approve people (IDs are in :YosegakiStatus)</span>
+:YosegakiAllow 2
+:YosegakiAllow 3 view
+:YosegakiDeny 4
+:YosegakiRevoke 2</pre></div>
+    </div>
+    <div>
+      <h3><span lang="en">Guest</span><span lang="ja">ゲスト</span></h3>
+      <div class="code"><pre><span class="c">" open the link you were given</span>
+:YosegakiJoin wss://<span class="host-name">yosegaki.compile-error.net</span>/ws/xxxxxxxxxxxxxxxx
+
+<span class="c">" or pick a public session</span>
+:YosegakiList <span class="host-name">yosegaki.compile-error.net</span>
+
+<span class="c">" viewers can ask to edit</span>
+:YosegakiRequestEdit</pre></div>
+    </div>
+  </div>
+
+  <table class="roles">
+    <thead><tr><th></th><th>public</th><th>private</th></tr></thead>
+    <tbody>
+      <tr><th><span lang="en">Joining</span><span lang="ja">参加</span></th><td><span lang="en">anyone with the link, as a viewer</span><span lang="ja">リンクを知っていれば誰でも、閲覧者として</span></td><td><span lang="en">waits for the host</span><span lang="ja">ホストの承認待ち</span></td></tr>
+      <tr><th><span lang="en">Editing</span><span lang="ja">編集</span></th><td colspan="2"><span lang="en">only after the host allows it</span><span lang="ja">ホストが許可した人だけ</span></td></tr>
+      <tr><th><span lang="en">Listed</span><span lang="ja">一覧表示</span></th><td><span lang="en">yes, in :YosegakiList</span><span lang="ja">:YosegakiList に表示される</span></td><td><span lang="en">no</span><span lang="ja">されない</span></td></tr>
+      <tr><th><span lang="en">Ends</span><span lang="ja">終了</span></th><td colspan="2"><span lang="en">when the host leaves</span><span lang="ja">ホストが抜けたとき</span></td></tr>
+    </tbody>
+  </table>
+  <p class="note"><span lang="en">Your name comes from</span><span lang="ja">表示名は</span> <code>g:yosegaki_name</code> <span lang="en">or</span><span lang="ja">か</span> <code>$USER</code><span lang="en">. It is only a label; people are told apart by ID. See</span><span lang="ja">から決まります。表示用のラベルで、人の区別には ID を使います。詳しくは</span> <code>:help yosegaki</code><span lang="ja">を見てください。</span><span lang="en">.</span></p>
+</section>
+
+<section id="sessions">
+  <h2><span lang="en">Public sessions now</span><span lang="ja">公開中のセッション</span></h2>
+  <div id="session-list" class="session-list"><p class="empty"><span lang="en">Loading...</span><span lang="ja">読み込み中...</span></p></div>
+</section>
+
+<section id="selfhost">
+  <h2><span lang="en">Run your own server</span><span lang="ja">自分でサーバを立てる</span></h2>
+  <div class="cols">
+    <div>
+      <div class="code"><pre>docker run -d -p 8080:8080 ghcr.io/mattn/yosegaki</pre></div>
+      <p><span lang="en">A static binary on a scratch image, running as a non-root user. Sessions live in memory, so run one instance.</span><span lang="ja">scratch イメージに静的バイナリを1つだけ置いたコンテナで、root 以外のユーザで動きます。セッションはメモリ上にあるので、インスタンスは1つで動かしてください。</span></p>
+    </div>
+    <div>
+      <div class="code"><pre>yosegaki serve -addr :8080</pre></div>
+      <p><span lang="en">Put it behind anything that terminates TLS and passes WebSockets. The server pings every 30 seconds so idle sessions survive proxies such as Cloudflare.</span><span lang="ja">TLS を終端して WebSocket を通すプロキシの後ろに置いてください。サーバは30秒ごとに ping を送るので、Cloudflare のようなプロキシ越しでもアイドル中のセッションが切れません。</span></p>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <p>
+    <a href="https://github.com/mattn/yosegaki">mattn/yosegaki</a> ·
+    <a href="https://github.com/mattn/vim-yosegaki">mattn/vim-yosegaki</a> ·
+    MIT License · Yasuhiro Matsumoto (a.k.a. mattn)
+  </p>
+</footer>
+</body>
+</html>

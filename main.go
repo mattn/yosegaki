@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -74,10 +76,22 @@ func connect(url string) error {
 			}
 		}
 	}()
-	err = <-errc
+	// Vim closes stdin to leave and sends SIGTERM when it exits. Close the
+	// WebSocket properly then, or the server may not notice that we left.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	select {
+	case err = <-errc:
+	case <-sig:
+		err = nil
+	}
+	if err == nil {
+		c.Close(websocket.StatusNormalClosure, "")
+		return nil
+	}
 	// The server says why it closed in a message, so a closed connection is
 	// not worth another error.
-	if err == nil || errors.Is(err, io.EOF) || websocket.CloseStatus(err) != -1 {
+	if errors.Is(err, io.EOF) || websocket.CloseStatus(err) != -1 {
 		return nil
 	}
 	return err

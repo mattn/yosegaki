@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"embed"
 	"encoding/base32"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"log"
 	"net/http"
 	"sort"
@@ -544,17 +546,38 @@ func serve(addr string) error {
 	return http.ListenAndServe(addr, httpHandler(newServer()))
 }
 
+//go:embed web
+var webFS embed.FS
+
 func httpHandler(s *server) http.Handler {
+	static, _ := fs.Sub(webFS, "web")
+	files := http.FileServerFS(static)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/sessions", s.handleSessions)
+	mux.Handle("/static/", http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "" || strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		files.ServeHTTP(w, r)
+	})))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write([]byte("yosegaki: collaborative editing server for Vim\nhttps://github.com/mattn/vim-yosegaki\n"))
+		http.ServeFileFS(w, r, static, "index.html")
 	})
-	return mux
+	return securityHeaders(mux)
+}
+
+func securityHeaders(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hd := w.Header()
+		hd.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+		hd.Set("X-Content-Type-Options", "nosniff")
+		hd.Set("Referrer-Policy", "no-referrer")
+		h.ServeHTTP(w, r)
+	})
 }
