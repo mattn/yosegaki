@@ -575,7 +575,9 @@ func httpHandler(s *server) http.Handler {
 func securityHeaders(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hd := w.Header()
-		hd.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+		hd.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; "+
+			// Cloudflare Web Analytics, injected by the proxy.
+			"script-src 'self' https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com")
 		hd.Set("X-Content-Type-Options", "nosniff")
 		hd.Set("Referrer-Policy", "no-referrer")
 		h.ServeHTTP(w, r)
