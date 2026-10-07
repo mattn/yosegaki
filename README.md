@@ -24,6 +24,8 @@ docker run -d -p 8080:8080 ghcr.io/mattn/yosegaki
 
 ```
 yosegaki serve -addr :8080      # run the server
+    -real-ip-header CF-Connecting-IP   # trust this header for client IPs (only behind a proxy that sets it)
+    -max-memory 96                     # MB for documents, history and send queues
 yosegaki connect URL            # stdio bridge used by vim-yosegaki
 yosegaki list URL               # print public sessions as JSON
 ```
@@ -46,6 +48,8 @@ location / {
 ```
 
 Sessions live in memory and end when the host disconnects.
+
+Limits: documents up to 1MB, 32 people per session, 16 connections per IP, 10 new sessions per IP per minute, 256 connections in total. When the memory budget runs out, new sessions and growing edits are refused instead of the server running out of memory.
 
 ## License
 

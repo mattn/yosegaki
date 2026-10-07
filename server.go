@@ -9,11 +9,15 @@ import (
 	"errors"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/coder/websocket"
@@ -21,16 +25,25 @@ import (
 )
 
 const (
-	maxMessageSize  = 8 << 20
-	maxDocumentSize = 4 << 20
+	maxMessageSize  = 2 << 20
+	maxDocumentSize = 1 << 20
 	maxClients      = 32
 	maxPending      = 16
 	maxSessions     = 1000
 	maxHistory      = 1000
+	maxHistoryBytes = 2 << 20
+	maxQueueBytes   = 4 << 20
+	maxConns        = 256
+	maxConnsPerIP   = 16
+	createsPerIP    = 10 // per createWindow
+	createWindow    = time.Minute
 	writeTimeout    = 10 * time.Second
 	helloTimeout    = 10 * time.Second
 	sendQueueSize   = 256
 )
+
+// Memory the server may spend on documents, history and send queues.
+const defaultMaxMemory = 96 << 20
 
 // Proxies such as Cloudflare drop WebSockets idle for about 100 seconds.
 const pingInterval = 30 * time.Second
@@ -72,16 +85,33 @@ type client struct {
 	pos     int
 	baseRev int
 	send    chan []byte
+	queued  atomic.Int64
 	conn    *websocket.Conn
+	srv     *server
+	ip      string
 }
 
 func (c *client) push(b []byte) {
+	n := int64(len(b))
+	if c.queued.Load()+n > maxQueueBytes || !c.srv.reserve(n) {
+		// Too slow to keep up, or the server is out of memory; the reader
+		// goroutine cleans up.
+		c.conn.CloseNow()
+		return
+	}
 	select {
 	case c.send <- b:
+		c.queued.Add(n)
 	default:
-		// Too slow to keep up; the reader goroutine cleans up.
+		c.srv.release(n)
 		c.conn.CloseNow()
 	}
+}
+
+// sent is called by the writer once b has left the queue.
+func (c *client) sent(b []byte) {
+	c.queued.Add(-int64(len(b)))
+	c.srv.release(int64(len(b)))
 }
 
 func (c *client) canEdit() bool {
@@ -89,31 +119,130 @@ func (c *client) canEdit() bool {
 }
 
 type session struct {
-	id       string
-	public   bool
-	title    string
-	created  time.Time
-	mu       sync.Mutex
-	closed   bool
-	doc      string
-	docLen   int
-	filetype string
-	rev      int
-	histBase int
-	history  []*ot.Operation
-	host     *client
-	clients  map[int]*client
-	nextID   int
+	id        string
+	public    bool
+	title     string
+	created   time.Time
+	mu        sync.Mutex
+	closed    bool
+	doc       string
+	docLen    int
+	filetype  string
+	rev       int
+	histBase  int
+	history   []*ot.Operation
+	histBytes int
+	host      *client
+	clients   map[int]*client
+	nextID    int
+}
+
+// size is what a session holds in memory. The caller must hold ss.mu.
+func (ss *session) size() int64 {
+	return int64(len(ss.doc) + ss.histBytes)
 }
 
 type server struct {
 	mu           sync.Mutex
 	sessions     map[string]*session
 	pingInterval time.Duration
+	maxMemory    int64
+	used         atomic.Int64
+	// realIPHeader names a header set by a trusted proxy, such as
+	// CF-Connecting-IP. Empty means the peer address is used.
+	realIPHeader string
+	limiter      ipLimiter
 }
 
 func newServer() *server {
-	return &server{sessions: map[string]*session{}, pingInterval: pingInterval}
+	return &server{
+		sessions:     map[string]*session{},
+		pingInterval: pingInterval,
+		maxMemory:    defaultMaxMemory,
+		limiter:      ipLimiter{conns: map[string]int{}, creates: map[string][]time.Time{}},
+	}
+}
+
+var errFull = errors.New("server is busy, try again later")
+
+func (s *server) reserve(n int64) bool {
+	for {
+		cur := s.used.Load()
+		if cur+n > s.maxMemory {
+			return false
+		}
+		if s.used.CompareAndSwap(cur, cur+n) {
+			return true
+		}
+	}
+}
+
+func (s *server) release(n int64) {
+	s.used.Add(-n)
+}
+
+func (s *server) clientIP(r *http.Request) string {
+	if s.realIPHeader != "" {
+		if v := r.Header.Get(s.realIPHeader); v != "" {
+			return strings.TrimSpace(strings.Split(v, ",")[0])
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+type ipLimiter struct {
+	mu      sync.Mutex
+	total   int
+	conns   map[string]int
+	creates map[string][]time.Time
+}
+
+func (l *ipLimiter) acquire(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.total >= maxConns || l.conns[ip] >= maxConnsPerIP {
+		return false
+	}
+	l.total++
+	l.conns[ip]++
+	return true
+}
+
+func (l *ipLimiter) release(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.total--
+	if l.conns[ip]--; l.conns[ip] <= 0 {
+		delete(l.conns, ip)
+	}
+}
+
+func (l *ipLimiter) allowCreate(ip string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	recent := func(ts []time.Time) []time.Time {
+		return slices.DeleteFunc(ts, func(t time.Time) bool { return now.Sub(t) >= createWindow })
+	}
+	if len(l.creates) > 10000 {
+		for k, ts := range l.creates {
+			if ts = recent(ts); len(ts) == 0 {
+				delete(l.creates, k)
+			} else {
+				l.creates[k] = ts
+			}
+		}
+	}
+	ts := recent(l.creates[ip])
+	if len(ts) >= createsPerIP {
+		l.creates[ip] = ts
+		return false
+	}
+	l.creates[ip] = append(ts, now)
+	return true
 }
 
 func newSessionID() string {
@@ -131,9 +260,11 @@ func errorMessage(msg string) []byte {
 	return encode(map[string]any{"type": "error", "error": msg})
 }
 
+// sanitize makes a label safe to show in a terminal: no control characters
+// (C0, DEL and C1) and no bidi controls that could reorder what is shown.
 func sanitize(s string, limit int) string {
 	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
 			return -1
 		}
 		return r
@@ -147,8 +278,8 @@ func sanitize(s string, limit int) string {
 func (s *server) create(m *inMessage) (*session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.sessions) >= maxSessions {
-		return nil, errors.New("too many sessions")
+	if len(s.sessions) >= maxSessions || !s.reserve(int64(len(m.Text))) {
+		return nil, errFull
 	}
 	ss := &session{
 		id:       newSessionID(),
@@ -170,10 +301,11 @@ func (s *server) lookup(id string) *session {
 	return s.sessions[id]
 }
 
-func (s *server) remove(ss *session) {
+func (s *server) remove(ss *session, size int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, ss.id)
+	s.release(size)
 }
 
 func (ss *session) peers() []peer {
@@ -218,7 +350,7 @@ func (ss *session) admit(cl *client, role string) {
 	ss.sendInit(cl)
 }
 
-func (ss *session) join(c *websocket.Conn, name string, host bool) (*client, error) {
+func (ss *session) join(srv *server, c *websocket.Conn, ip, name string, host bool) (*client, error) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	if ss.closed {
@@ -239,6 +371,8 @@ func (ss *session) join(c *websocket.Conn, name string, host bool) (*client, err
 		name: name,
 		send: make(chan []byte, sendQueueSize),
 		conn: c,
+		srv:  srv,
+		ip:   ip,
 	}
 	switch {
 	case host:
@@ -280,11 +414,13 @@ func (ss *session) leave(s *server, cl *client) {
 			o.push(encode(map[string]any{"type": "closed", "reason": "host left"}))
 			closeLater(o, "host left")
 		}
+		size := ss.size()
 		ss.mu.Unlock()
-		s.remove(ss)
-		log.Printf("session %s closed", ss.id)
+		s.remove(ss, size)
+		log.Printf("session %s: closed, host %s left", ss.id, cl.ip)
 		return
 	}
+	log.Printf("session %s: %s left as #%d", ss.id, cl.ip, cl.id)
 	if cl.role == rolePending {
 		ss.host.push(encode(map[string]any{"type": "cancel", "client": cl.id, "name": cl.name}))
 	} else {
@@ -296,6 +432,9 @@ func (ss *session) leave(s *server, cl *client) {
 func (ss *session) operation(cl *client, rev int, op *ot.Operation) error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
+	if ss.closed {
+		return errors.New("session is closed")
+	}
 	if !cl.canEdit() {
 		return errors.New("you are not allowed to edit")
 	}
@@ -314,17 +453,24 @@ func (ss *session) operation(cl *client, rev int, op *ot.Operation) error {
 	if op.BaseLen != ss.docLen {
 		return errors.New("operation does not match the document")
 	}
-	if op.TargetLen > maxDocumentSize {
-		return errors.New("document too large")
-	}
 	doc, err := op.Apply(ss.doc)
 	if err != nil {
 		return err
+	}
+	if len(doc) > maxDocumentSize {
+		return errors.New("document too large")
+	}
+	grow := int64(len(doc)-len(ss.doc)) + int64(op.Size())
+	if grow > 0 && !cl.srv.reserve(grow) {
+		return errFull
+	} else if grow < 0 {
+		cl.srv.release(-grow)
 	}
 	ss.doc = doc
 	ss.docLen = op.TargetLen
 	ss.rev++
 	ss.history = append(ss.history, op)
+	ss.histBytes += op.Size()
 	cl.baseRev = rev
 
 	cl.push(encode(map[string]any{"type": "ack", "rev": ss.rev}))
@@ -333,17 +479,18 @@ func (ss *session) operation(cl *client, rev int, op *ot.Operation) error {
 	}
 	ss.broadcast(encode(map[string]any{"type": "op", "rev": ss.rev, "op": op, "client": cl.id}), cl)
 
-	if len(ss.history) > maxHistory {
-		base := ss.rev
-		for _, o := range ss.clients {
-			if o.canEdit() {
-				base = min(base, o.baseRev)
-			}
-		}
-		// Keep enough history for edits that are still in flight.
-		base = max(base, ss.rev-maxHistory)
-		ss.history = ss.history[base-ss.histBase:]
-		ss.histBase = base
+	// Old history is only needed to transform edits that are still in
+	// flight. Clients that fall this far behind get an error and drop.
+	n, freed := 0, 0
+	for n < len(ss.history)-1 && (len(ss.history)-n > maxHistory || ss.histBytes-freed > maxHistoryBytes) {
+		freed += ss.history[n].Size()
+		n++
+	}
+	if n > 0 {
+		ss.history = slices.Clone(ss.history[n:])
+		ss.histBase += n
+		ss.histBytes -= freed
+		cl.srv.release(int64(freed))
 	}
 	return nil
 }
@@ -402,6 +549,13 @@ func (ss *session) setRole(from *client, id int, role string) error {
 }
 
 func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
+	ip := s.clientIP(r)
+	if !s.limiter.acquire(ip) {
+		log.Printf("%s: too many connections", ip)
+		http.Error(w, "too many connections", http.StatusTooManyRequests)
+		return
+	}
+	defer s.limiter.release(ip)
 	c, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
@@ -432,21 +586,30 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			c.Write(ctx, websocket.MessageText, errorMessage("document too large"))
 			return
 		}
+		if !s.limiter.allowCreate(ip, time.Now()) {
+			log.Printf("%s: too many sessions created", ip)
+			c.Write(ctx, websocket.MessageText, errorMessage("too many sessions created, try again later"))
+			return
+		}
 		if ss, err = s.create(&hello); err != nil {
+			log.Printf("%s: cannot create a session: %v", ip, err)
 			c.Write(ctx, websocket.MessageText, errorMessage(err.Error()))
 			return
 		}
-		log.Printf("session %s created (public=%v)", ss.id, ss.public)
+		log.Printf("session %s: created by %s (public=%v, %d bytes)", ss.id, ip, ss.public, len(hello.Text))
 	} else if ss = s.lookup(hello.Session); ss == nil {
+		log.Printf("%s: no such session %q", ip, sanitize(hello.Session, 32))
 		c.Write(ctx, websocket.MessageText, errorMessage("no such session"))
 		return
 	}
 
-	cl, err := ss.join(c, name, hello.Create)
+	cl, err := ss.join(s, c, ip, name, hello.Create)
 	if err != nil {
+		log.Printf("session %s: %s rejected: %v", ss.id, ip, err)
 		c.Write(ctx, websocket.MessageText, errorMessage(err.Error()))
 		return
 	}
+	log.Printf("session %s: %s joined as #%d %q (%s)", ss.id, ip, cl.id, cl.name, cl.role)
 	go func() {
 		t := time.NewTicker(s.pingInterval)
 		defer t.Stop()
@@ -478,14 +641,18 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}()
 	go func() {
 		defer close(written)
+		failed := false
 		for b := range cl.send {
-			wctx, cancel := context.WithTimeout(ctx, writeTimeout)
-			err := c.Write(wctx, websocket.MessageText, b)
-			cancel()
-			if err != nil {
-				c.CloseNow()
-				return
+			if !failed {
+				wctx, cancel := context.WithTimeout(ctx, writeTimeout)
+				if err := c.Write(wctx, websocket.MessageText, b); err != nil {
+					c.CloseNow()
+					failed = true
+				}
+				cancel()
 			}
+			// Keep draining so every queued byte is given back.
+			cl.sent(b)
 		}
 	}()
 
@@ -502,6 +669,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		switch m.Type {
 		case "op":
 			if err := ss.operation(cl, m.Rev, m.Op); err != nil {
+				log.Printf("session %s: dropped %s #%d: %v", ss.id, ip, cl.id, err)
 				// The client cannot recover from a rejected edit, so drop it.
 				cl.push(errorMessage(err.Error()))
 				return
@@ -541,9 +709,12 @@ func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(list)
 }
 
-func serve(addr string) error {
+func serve(addr, realIPHeader string, maxMemory int64) error {
+	s := newServer()
+	s.realIPHeader = realIPHeader
+	s.maxMemory = maxMemory
 	log.Printf("listening on %s", addr)
-	return http.ListenAndServe(addr, httpHandler(newServer()))
+	return http.ListenAndServe(addr, httpHandler(s))
 }
 
 //go:embed web

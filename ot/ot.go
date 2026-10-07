@@ -76,6 +76,15 @@ func (o *Operation) Delete(n int) *Operation {
 	return o
 }
 
+// Size estimates the memory an operation holds, in bytes.
+func (o *Operation) Size() int {
+	n := 0
+	for _, c := range o.ops {
+		n += 16 + len(c.s)
+	}
+	return n
+}
+
 func (o *Operation) IsNoop() bool {
 	return len(o.ops) == 0 || (len(o.ops) == 1 && o.ops[0].isRetain())
 }
