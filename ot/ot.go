@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -74,6 +75,16 @@ func (o *Operation) Delete(n int) *Operation {
 		o.ops = append(o.ops, component{n: -n})
 	}
 	return o
+}
+
+// ContainsRune reports whether any inserted text contains r.
+func (o *Operation) ContainsRune(r rune) bool {
+	for _, c := range o.ops {
+		if strings.ContainsRune(c.s, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // Size estimates the memory an operation holds, in bytes.

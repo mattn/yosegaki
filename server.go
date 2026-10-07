@@ -7,10 +7,12 @@ import (
 	"encoding/base32"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -261,11 +263,30 @@ func errorMessage(msg string) []byte {
 	return encode(map[string]any{"type": "error", "error": msg})
 }
 
-// sanitize makes a label safe to show in a terminal: no control characters
-// (C0, DEL and C1) and no bidi controls that could reorder what is shown.
+const maxNameLen = 32
+
+// validName reports whether a name is fit to show next to a cursor in a
+// terminal: graphic characters and spaces only, so no line breaks, escape
+// sequences, zero-width or bidi controls.
+func validName(s string) bool {
+	if !utf8.ValidString(s) || strings.TrimSpace(s) != s || s == "" || utf8.RuneCountInString(s) > maxNameLen {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsGraphic(r) {
+			return false
+		}
+	}
+	return true
+}
+
+var filetypeRe = regexp.MustCompile(`^[A-Za-z0-9_.-]{0,32}$`)
+
+// sanitize keeps the graphic characters of a label that comes from
+// elsewhere, such as a file name, so it is safe to show.
 func sanitize(s string, limit int) string {
 	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
+		if !unicode.IsGraphic(r) || r == utf8.RuneError {
 			return -1
 		}
 		return r
@@ -273,7 +294,7 @@ func sanitize(s string, limit int) string {
 	if utf8.RuneCountInString(s) > limit {
 		s = string([]rune(s)[:limit])
 	}
-	return s
+	return strings.TrimSpace(s)
 }
 
 func (s *server) create(m *inMessage) (*session, error) {
@@ -289,7 +310,7 @@ func (s *server) create(m *inMessage) (*session, error) {
 		created:  time.Now(),
 		doc:      m.Text,
 		docLen:   utf8.RuneCountInString(m.Text),
-		filetype: sanitize(m.Filetype, 32),
+		filetype: m.Filetype,
 		clients:  map[int]*client{},
 	}
 	s.sessions[ss.id] = ss
@@ -442,6 +463,10 @@ func (ss *session) operation(cl *client, rev int, op *ot.Operation) error {
 	if op == nil {
 		return errors.New("missing op")
 	}
+	// Vim cannot hold NUL in a string, so it would break the buffers.
+	if op.ContainsRune(0) {
+		return errors.New("text must not contain NUL")
+	}
 	if rev < ss.histBase || rev > ss.rev {
 		return errors.New("revision out of range")
 	}
@@ -576,15 +601,25 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		c.Write(ctx, websocket.MessageText, errorMessage("expected hello"))
 		return
 	}
-	name := sanitize(hello.Name, 32)
-	if name == "" {
-		name = "anonymous"
+	if !validName(hello.Name) {
+		log.Printf("%s: invalid name %q", ip, hello.Name)
+		c.Write(ctx, websocket.MessageText, errorMessage(fmt.Sprintf("invalid name: use 1 to %d printable characters, without line breaks or control characters", maxNameLen)))
+		return
 	}
+	name := hello.Name
 
 	var ss *session
 	if hello.Create {
 		if len(hello.Text) > maxDocumentSize {
 			c.Write(ctx, websocket.MessageText, errorMessage("document too large"))
+			return
+		}
+		if strings.ContainsRune(hello.Text, 0) {
+			c.Write(ctx, websocket.MessageText, errorMessage("text must not contain NUL"))
+			return
+		}
+		if !filetypeRe.MatchString(hello.Filetype) {
+			c.Write(ctx, websocket.MessageText, errorMessage("invalid filetype"))
 			return
 		}
 		if !s.limiter.allowCreate(ip, time.Now()) {

@@ -226,9 +226,45 @@ func TestCreateRate(t *testing.T) {
 }
 
 func TestSanitize(t *testing.T) {
-	got := sanitize(" a\x1b[31mb\u009bc‮d⁦e ", 32)
-	if got != "a[31mbcde" {
+	got := sanitize(" a\x1b[31mb\u009bc\u202ed\u2066e\u200bf\u2028g ", 64)
+	if got != "a[31mbcdefg" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestValidName(t *testing.T) {
+	for _, name := range []string{"mattn", "まっつん", "Yasuhiro Matsumoto", "a-b_c.d@e"} {
+		if !validName(name) {
+			t.Errorf("%q should be valid", name)
+		}
+	}
+	for _, name := range []string{"", " ", " mattn", "mattn ", "a\nb", "a\rb", "a\tb", "a\x1b[2Jb", "a\u009bb",
+		"a\u202eb", "a\u200bb", "a\ufeffb", "a\u2028b", "a\x00b", "\xff", strings.Repeat("a", maxNameLen+1)} {
+		if validName(name) {
+			t.Errorf("%q should be invalid", name)
+		}
+	}
+}
+
+func TestRejectsBadHello(t *testing.T) {
+	url := newTestServer(t, pingInterval)
+	for _, hello := range []map[string]any{
+		{"type": "hello", "create": true, "name": "a\nb", "text": ""},
+		{"type": "hello", "create": true, "name": "x", "text": "a\x00b"},
+		{"type": "hello", "create": true, "name": "x", "text": "", "filetype": "../../evil"},
+	} {
+		c := dial(t, url, hello)
+		c.expect("error")
+	}
+}
+
+func TestRejectsNUL(t *testing.T) {
+	url := newTestServer(t, pingInterval)
+	host := dial(t, url, map[string]any{"type": "hello", "create": true, "name": "host", "text": ""})
+	host.expect("init")
+	host.send(map[string]any{"type": "op", "rev": 0, "op": []any{"a\x00"}})
+	if e := host.expect("error"); !strings.Contains(e["error"].(string), "NUL") {
+		t.Fatalf("NUL not rejected: %v", e)
 	}
 }
 
