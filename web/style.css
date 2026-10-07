@@ -42,6 +42,7 @@ code {
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: .05em .35em;
+  overflow-wrap: anywhere;
 }
 
 .nav {
@@ -342,7 +343,14 @@ h1 { margin: 0; line-height: 1.05; }
 .roles thead th { color: var(--muted); font-weight: 600; font-family: var(--mono); }
 .roles tbody th { color: var(--text); font-weight: 600; width: 22%; }
 .roles td { color: #aeb7c4; }
-.note { color: var(--muted); font-size: 14px; }
+.notes { margin: 24px 0 0; padding-left: 1.2em; color: #aeb7c4; font-size: 15px; }
+.notes li { margin: 6px 0; }
+.notes b, .checks b { color: var(--text); }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; align-content: start; }
+.checks li { position: relative; padding: 14px 16px 14px 44px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); color: #aeb7c4; font-size: 15px; }
+.checks li::before { position: absolute; left: 16px; top: 13px; font: 700 15px var(--mono); }
+.checks.ok li::before { content: "\2713"; color: var(--green); }
+.checks.warn li::before { content: "!"; color: var(--yellow); left: 20px; }
 
 .session-list { display: grid; gap: 10px; }
 .session {

@@ -146,8 +146,8 @@
       <div class="code"><pre><span class="c">" open the link you were given</span>
 :YosegakiJoin wss://<span class="host-name">yosegaki.compile-error.net</span>/ws/xxxxxxxxxxxxxxxx
 
-<span class="c">" or pick a public session</span>
-:YosegakiList <span class="host-name">yosegaki.compile-error.net</span>
+<span class="c">" or pick a public session on a server</span>
+:YosegakiJoin <span class="host-name">yosegaki.compile-error.net</span>
 
 <span class="c">" viewers can ask to edit</span>
 :YosegakiRequestEdit</pre></div>
@@ -163,7 +163,29 @@
       <tr><th><span lang="en">Ends</span><span lang="ja">終了</span></th><td colspan="2"><span lang="en">when the host leaves</span><span lang="ja">ホストが抜けたとき</span></td></tr>
     </tbody>
   </table>
-  <p class="note"><span lang="en">Your name comes from</span><span lang="ja">表示名は</span> <code>g:yosegaki_name</code> <span lang="en">or</span><span lang="ja">か</span> <code>$USER</code><span lang="en">. It is only a label; people are told apart by ID. See</span><span lang="ja">から決まります。表示用のラベルで、人の区別には ID を使います。詳しくは</span> <code>:help yosegaki</code><span lang="ja">を見てください。</span><span lang="en">.</span></p>
+  <ul class="notes">
+    <li><span lang="en"><b>Servers.</b> <code>:YosegakiShare</code>, <code>:YosegakiJoin</code> and <code>:YosegakiList</code> open a connection and take a server. A connected buffer remembers it in <code>b:yosegaki_server</code>, so later commands there can leave it out; with neither, <code>ws://localhost:8080</code> is used. Commands such as <code>:YosegakiAllow</code> go over the connection the buffer already has.</span><span lang="ja"><b>サーバ</b>: 接続を作る <code>:YosegakiShare</code>、<code>:YosegakiJoin</code>、<code>:YosegakiList</code> はサーバを受け取ります。接続したバッファはそのサーバを <code>b:yosegaki_server</code> に覚えるので、そのバッファでは以後サーバを省略できます。どちらもなければ <code>ws://localhost:8080</code> を使います。<code>:YosegakiAllow</code> などは、バッファが持っている接続をそのまま使います。</span></li>
+    <li><span lang="en"><b>Names.</b> Yours comes from <code>g:yosegaki_name</code> or <code>$USER</code>: 1 to 32 printable characters, with no line breaks, control or invisible characters. It is only a label; people are told apart by ID.</span><span lang="ja"><b>表示名</b>: <code>g:yosegaki_name</code> か <code>$USER</code> から決まります。改行、制御文字、目に見えない文字を含まない、1〜32文字の表示可能な文字列である必要があります。表示用のラベルで、人の区別には ID を使います。</span></li>
+    <li><span lang="en">See <code>:help yosegaki</code> for the rest.</span><span lang="ja">詳しくは <code>:help yosegaki</code> を見てください。</span></li>
+  </ul>
+</section>
+
+<section id="safety">
+  <h2><span lang="en">What others can and cannot do</span><span lang="ja">他の人にできること、できないこと</span></h2>
+  <div class="cols">
+    <ul class="checks ok">
+      <li><span lang="en">Edits from others are written into your buffer as text. They are never typed as keys, so an <code>&lt;Esc&gt;</code> or <code>:command</code> in them stays plain characters.</span><span lang="ja">他の人の編集は、テキストとしてバッファに書き込まれるだけです。キー入力として扱われることはないので、<code>&lt;Esc&gt;</code> や <code>:コマンド</code> が混ざっていても、ただの文字として残ります。</span></li>
+      <li><span lang="en">Roles are enforced by the server. A private session sends nothing until the host lets you in, and only people the host allows can edit.</span><span lang="ja">権限はサーバ側で強制されます。private のセッションは、ホストが承認するまで何も送りません。編集できるのは、ホストが許可した人だけです。</span></li>
+      <li><span lang="en">Names with line breaks, escape sequences, zero-width or bidi characters are refused, and so is text with NUL.</span><span lang="ja">改行、エスケープシーケンス、ゼロ幅文字、双方向制御文字を含む名前は拒否します。NUL 文字を含むテキストも拒否します。</span></li>
+      <li><span lang="en">Documents, history and queues share one memory budget, and connections are limited per IP, so nobody can run the server out of memory.</span><span lang="ja">文書、編集履歴、送信キューは1つのメモリ予算で管理し、接続数も IP ごとに制限しています。誰かがサーバのメモリを使い尽くすことはできません。</span></li>
+    </ul>
+    <ul class="checks warn">
+      <li><span lang="en">Editors can change any of the text. Read shared code before you save and run it.</span><span lang="ja">編集を許可した人は、本文をどこでも書き換えられます。共有したコードを保存して実行する前には、中身を確認してください。</span></li>
+      <li><span lang="en">Public means public: anyone with the link can read along, and the session is listed on this page.</span><span lang="ja">public は、本当にインターネット全体への公開です。リンクを知っている人は誰でも読めて、このページの一覧にも載ります。</span></li>
+      <li><span lang="en">The host's filetype is set on your buffer, which loads your own ftplugin and syntax files for it.</span><span lang="ja">ホストのファイルタイプがあなたのバッファに設定され、そのファイルタイプ用の、あなたの環境にある ftplugin や構文ファイルが読み込まれます。</span></li>
+      <li><span lang="en">Edits by others are part of your undo history.</span><span lang="ja">他の人の編集も、undo の履歴に入ります。</span></li>
+    </ul>
+  </div>
 </section>
 
 <section id="sessions">
@@ -181,6 +203,7 @@
     <div>
       <div class="code"><pre>yosegaki serve -addr :8080</pre></div>
       <p><span lang="en">Put it behind anything that terminates TLS and passes WebSockets. The server pings every 30 seconds so idle sessions survive proxies such as Cloudflare.</span><span lang="ja">TLS を終端して WebSocket を通すプロキシの後ろに置いてください。サーバは30秒ごとに ping を送るので、Cloudflare のようなプロキシ越しでもアイドル中のセッションが切れません。</span></p>
+      <p><span lang="en">Client IPs for the per-IP limits come from <code>CF-Connecting-IP</code> or <code>X-Forwarded-For</code>, so do not expose it directly. <code>-max-memory</code> sets the memory budget in MB (default 96).</span><span lang="ja">IP ごとの制限に使う送信元 IP は <code>CF-Connecting-IP</code> か <code>X-Forwarded-For</code> から取るので、プロキシを通さずに直接公開しないでください。<code>-max-memory</code> でメモリ予算を MB 単位で指定できます(既定は 96)。</span></p>
     </div>
   </div>
 </section>
